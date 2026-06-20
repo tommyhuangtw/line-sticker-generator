@@ -1,0 +1,6 @@
+Flask
+Pillow
+cloudinary
+python-dotenv
+openai
+requests

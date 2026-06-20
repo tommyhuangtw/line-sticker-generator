@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LINE 貼圖工坊</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .sticker-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .drop-zone { transition: all 0.2s; }
+    .drop-zone.drag-over { border-color: #3b82f6; background: #eff6ff; }
+    .checkerboard {
+      background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%),
+        linear-gradient(-45deg, #e5e7eb 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #e5e7eb 75%),
+        linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="max-w-2xl mx-auto px-4 py-8">
+    <!-- Header -->
+    <div class="text-center mb-8">
+      <h1 class="text-3xl font-bold text-gray-800">LINE 貼圖工坊</h1>
+      <p class="text-gray-500 mt-2">上傳照片，一鍵生成專屬貼圖</p>
+    </div>
+
+    <!-- Form -->
+    <div id="formSection" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-6">
+
+      <!-- Mode Selection -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-3">貼圖類型</label>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <button onclick="setMode('pet')" id="btn-pet"
+            class="mode-btn py-3 px-4 rounded-xl border-2 border-orange-400 bg-orange-50 text-orange-700 font-medium transition-all">
+            🐱 貓咪
+          </button>
+          <button onclick="setMode('dog')" id="btn-dog"
+            class="mode-btn py-3 px-4 rounded-xl border-2 border-gray-200 bg-white text-gray-600 font-medium transition-all hover:border-gray-300">
+            🐶 狗狗
+          </button>
+          <button onclick="setMode('kid')" id="btn-kid"
+            class="mode-btn py-3 px-4 rounded-xl border-2 border-gray-200 bg-white text-gray-600 font-medium transition-all hover:border-gray-300">
+            👶 小孩
+          </button>
+          <button onclick="setMode('character')" id="btn-character"
+            class="mode-btn py-3 px-4 rounded-xl border-2 border-gray-200 bg-white text-gray-600 font-medium transition-all hover:border-gray-300">
+            🎨 虛擬角色
+          </button>
+        </div>
+      </div>
+
+      <!-- Photo Upload -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">上傳參考照片</label>
+        <p id="photoHint" class="text-xs text-gray-400 mb-2">上傳寵物照片，AI 會參考外觀來生成貼圖</p>
+        <div id="dropZone" class="drop-zone border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:border-gray-400"
+          onclick="document.getElementById('photoInput').click()">
+          <div id="uploadPrompt">
+            <div class="text-3xl mb-2">📸</div>
+            <p class="text-sm text-gray-500">點擊上傳或拖放照片到這裡</p>
+            <p class="text-xs text-gray-400 mt-1">支援 JPG、PNG（最多 3 張）</p>
+          </div>
+          <div id="uploadedPhotos" class="hidden">
+            <div id="photoPreviewList" class="flex gap-3 justify-center flex-wrap"></div>
+            <p class="text-xs text-gray-400 mt-3">點擊可繼續新增（最多 3 張）</p>
+          </div>
+        </div>
+        <input type="file" id="photoInput" accept="image/jpeg,image/png,image/webp" multiple class="hidden" onchange="handleFileSelect(event)">
+      </div>
+
+      <!-- Description -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">外觀描述（選填）</label>
+        <input type="text" id="description" placeholder="例：橘色虎斑貓、圓臉大眼睛、很胖"
+          class="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 outline-none text-sm">
+      </div>
+
+      <!-- Personality (pet/dog only) -->
+      <div id="personalitySection" class="hidden">
+        <label class="block text-sm font-medium text-gray-700 mb-2">個性（選填，可多選）</label>
+        <div class="flex flex-wrap gap-2" id="personalityTags"></div>
+      </div>
+
+      <!-- Drawing Style (character mode) -->
+      <div id="drawingStyleSection" class="hidden">
+        <label class="block text-sm font-medium text-gray-700 mb-2">繪製風格</label>
+        <div class="flex flex-wrap gap-2" id="drawingStyleTags"></div>
+      </div>
+
+      <!-- Character Personality Input (character mode) -->
+      <div id="characterInputSection" class="hidden">
+        <label class="block text-sm font-medium text-gray-700 mb-2">角色設定</label>
+        <input type="text" id="characterName" placeholder="角色名稱（選填）"
+          class="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-400 outline-none text-sm mb-2">
+        <input type="text" id="characterPersonality" placeholder="個性 / 語助詞 / 說話風格（例：高冷、常說『哼』、句尾加『喵』）"
+          class="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-400 outline-none text-sm mb-2">
+        <button onclick="aiGeneratePhrases()" id="aiPhraseBtn"
+          class="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-xl transition-colors">
+          AI 自動生成貼圖文字
+        </button>
+      </div>
+
+      <!-- Target Audience -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-2">目標對象</label>
+        <p class="text-xs text-gray-400 mb-2">選擇貼圖的使用情境，會自動調整文字風格</p>
+        <div class="flex flex-wrap gap-2" id="audienceTags"></div>
+      </div>
+
+      <!-- Phrases -->
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <label class="block text-sm font-medium text-gray-700">貼圖文字（12 句）</label>
+          <div class="flex gap-3">
+            <button onclick="saveTemplate()" class="text-xs text-green-600 hover:text-green-800">儲存為模板</button>
+            <button onclick="resetPhrases()" class="text-xs text-blue-500 hover:text-blue-700">重設預設</button>
+          </div>
+        </div>
+        <p class="text-xs text-gray-400 mb-2">點擊文字即可直接編輯，修改成你喜歡的內容</p>
+        <div class="flex gap-2 mb-3 flex-wrap" id="phraseStyleTabs"></div>
+        <div id="savedTemplatesRow" class="hidden flex gap-2 mb-3 flex-wrap"></div>
+        <div class="grid grid-cols-3 gap-2" id="phrasesGrid"></div>
+      </div>
+
+      <!-- Generate Button -->
+      <button onclick="generate()" id="generateBtn"
+        class="w-full py-3.5 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-xl transition-colors text-lg">
+        生成貼圖
+      </button>
+    </div>
+
+    <!-- Progress -->
+    <div id="progressSection" class="hidden mt-6 bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+      <div class="flex items-center gap-3">
+        <div class="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+        <span id="progressText" class="text-gray-600">送出任務中...</span>
+      </div>
+      <div class="mt-3 bg-gray-100 rounded-full h-2 overflow-hidden">
+        <div id="progressBar" class="bg-blue-500 h-2 rounded-full transition-all duration-500" style="width: 5%"></div>
+      </div>
+    </div>
+
+    <!-- Error -->
+    <div id="errorSection" class="hidden mt-6 bg-red-50 border border-red-200 rounded-2xl p-6">
+      <p class="text-red-700 font-medium">生成失敗</p>
+      <p id="errorText" class="text-red-500 text-sm mt-1"></p>
+      <button onclick="resetUI()" class="mt-3 text-sm text-red-600 hover:text-red-800 underline">重新開始</button>
+    </div>
+
+    <!-- Results -->
+    <div id="resultSection" class="hidden mt-6 space-y-4 fade-in">
+      <!-- Grid Preview -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-medium text-gray-800 mb-3">生成結果</h2>
+        <img id="gridPreview" class="w-full rounded-xl" alt="Grid preview">
+      </div>
+
+      <!-- Individual Stickers -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-medium text-gray-800">個別貼圖預覽（已去背）</h2>
+          <span class="text-sm text-gray-400">透明 PNG</span>
+        </div>
+        <div class="sticker-grid" id="stickerGrid"></div>
+      </div>
+
+      <!-- Download -->
+      <div class="flex gap-3">
+        <button onclick="downloadZip()" id="downloadBtn"
+          class="flex-1 py-3.5 bg-green-500 hover:bg-green-600 text-white font-medium rounded-xl transition-colors text-lg">
+          下載 LINE 貼圖 ZIP
+        </button>
+        <button onclick="resetUI()"
+          class="py-3.5 px-6 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-xl transition-colors">
+          再做一組
+        </button>
+      </div>
+
+      <!-- LINE Upload Instructions -->
+      <div class="bg-green-50 border border-green-200 rounded-2xl p-5">
+        <h3 class="font-medium text-green-800 mb-3">如何上架到 LINE？</h3>
+        <div class="space-y-3">
+          <div class="flex gap-3">
+            <span class="flex-shrink-0 w-6 h-6 bg-green-500 text-white rounded-full text-xs flex items-center justify-center font-bold">1</span>
+            <div class="text-sm text-green-800">
+              <strong>下載 ZIP</strong> 並解壓縮到手機相簿
+            </div>
+          </div>
+          <div class="flex gap-3">
+            <span class="flex-shrink-0 w-6 h-6 bg-green-500 text-white rounded-full text-xs flex items-center justify-center font-bold">2</span>
+            <div class="text-sm text-green-800">
+              <strong>下載 LINE Sticker Maker</strong>（LINE 拍貼）App
+              <div class="flex gap-2 mt-1">
+                <a href="https://apps.apple.com/app/line-sticker-maker/id1459498500" target="_blank" class="text-xs text-green-600 underline">iOS 下載</a>
+                <a href="https://play.google.com/store/apps/details?id=jp.naver.line.stickermaker" target="_blank" class="text-xs text-green-600 underline">Android 下載</a>
+              </div>
+            </div>
+          </div>
+          <div class="flex gap-3">
+            <span class="flex-shrink-0 w-6 h-6 bg-green-500 text-white rounded-full text-xs flex items-center justify-center font-bold">3</span>
+            <div class="text-sm text-green-800">
+              <strong>建立新貼圖組</strong> → 選「自訂貼圖」→ 匯入 stickers/ 裡的 12 張圖片
+            </div>
+          </div>
+          <div class="flex gap-3">
+            <span class="flex-shrink-0 w-6 h-6 bg-green-500 text-white rounded-full text-xs flex items-center justify-center font-bold">4</span>
+            <div class="text-sm text-green-800">
+              <strong>設定標題、說明、價格</strong> → 送出審核（約 1 天通過）
+            </div>
+          </div>
+        </div>
+        <div class="mt-3 p-3 bg-green-100 rounded-lg">
+          <p class="text-xs text-green-700"><strong>ZIP 內容：</strong>stickers/（12 張透明 PNG）+ main.png（封面）+ tab.png（聊天室圖示）</p>
+          <p class="text-xs text-green-600 mt-1">貼圖已符合 LINE 規格：最大 370x320px、透明背景、偶數尺寸。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- History Gallery -->
+    <div id="historySection" class="mt-8">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-bold text-gray-800">歷史紀錄</h2>
+        <button onclick="loadHistory()" class="text-xs text-blue-500 hover:text-blue-700">重新整理</button>
+      </div>
+      <div id="historyList" class="space-y-4"></div>
+      <p id="historyEmpty" class="hidden text-sm text-gray-400 text-center py-6">還沒有生成紀錄</p>
+    </div>
+  </div>
+
+<script>
+// --- State ---
+let currentMode = 'pet';
+let currentTaskId = null;
+let pollTimer = null;
+let uploadedFiles = [];    // local File objects
+let uploadedUrls = [];     // cloudinary URLs after upload
+
+const MODE_COLORS = {
+  pet: { border: 'border-orange-400', bg: 'bg-orange-50', text: 'text-orange-700' },
+  dog: { border: 'border-amber-400', bg: 'bg-amber-50', text: 'text-amber-700' },
+  kid: { border: 'border-pink-400', bg: 'bg-pink-50', text: 'text-pink-700' },
+  character: { border: 'border-purple-400', bg: 'bg-purple-50', text: 'text-purple-700' },
+};
+
+let currentDrawingStyle = '保持原圖風格';
+const DRAWING_STYLES = ['保持原圖風格', '寫實感', '插畫風', 'Q版可愛'];
+
+let currentAudience = '通用日常';
+let audienceOptions = [];
+
+// --- Mode switching ---
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.className = 'mode-btn flex-1 py-3 px-4 rounded-xl border-2 border-gray-200 bg-white text-gray-600 font-medium transition-all hover:border-gray-300';
+  });
+  const activeBtn = document.getElementById(`btn-${mode}`);
+  const colors = MODE_COLORS[mode];
+  activeBtn.className = `mode-btn flex-1 py-3 px-4 rounded-xl border-2 ${colors.border} ${colors.bg} ${colors.text} font-medium transition-all`;
+
+  const placeholders = { pet: '例：橘色虎斑貓、圓臉大眼睛、很胖', dog: '例：柴犬、米色、很愛笑', kid: '例：2歲女寶寶、短頭髮、愛笑', character: '例：藍色頭髮的女孩、穿白色洋裝' };
+  document.getElementById('description').placeholder = placeholders[mode];
+
+  const photoHints = {
+    pet: '上傳寵物照片，AI 會參考外觀來生成貼圖',
+    dog: '上傳寵物照片，AI 會參考外觀來生成貼圖',
+    kid: '上傳小朋友照片，AI 會參考外觀來生成貼圖',
+    character: '上傳虛擬角色圖片，AI 會參考角色形象來生成貼圖',
+  };
+  document.getElementById('photoHint').textContent = photoHints[mode];
+
+  // Show/hide personality selector (pet/dog only)
+  const isPet = mode === 'pet' || mode === 'dog';
+  document.getElementById('personalitySection').classList.toggle('hidden', !isPet);
+  if (isPet) renderPersonalityTags();
+
+  // Show/hide character-specific sections
+  const isCharacter = mode === 'character';
+  document.getElementById('drawingStyleSection').classList.toggle('hidden', !isCharacter);
+  document.getElementById('characterInputSection').classList.toggle('hidden', !isCharacter);
+  if (isCharacter) renderDrawingStyleTags();
+
+  loadPhrases(mode);
+}
+
+// --- Photo Upload ---
+function handleFileSelect(e) {
+  const files = Array.from(e.target.files);
+  addFiles(files);
+  e.target.value = ''; // reset so same file can be re-selected
+}
+
+function addFiles(files) {
+  for (const f of files) {
+    if (uploadedFiles.length >= 3) break;
+    if (!f.type.startsWith('image/')) continue;
+    uploadedFiles.push(f);
+  }
+  renderPhotoPreview();
+}
+
+function removePhoto(index) {
+  uploadedFiles.splice(index, 1);
+  renderPhotoPreview();
+}
+
+function renderPhotoPreview() {
+  const list = document.getElementById('photoPreviewList');
+  const prompt = document.getElementById('uploadPrompt');
+  const container = document.getElementById('uploadedPhotos');
+
+  if (uploadedFiles.length === 0) {
+    prompt.classList.remove('hidden');
+    container.classList.add('hidden');
+    return;
+  }
+
+  prompt.classList.add('hidden');
+  container.classList.remove('hidden');
+
+  list.innerHTML = uploadedFiles.map((f, i) => {
+    const url = URL.createObjectURL(f);
+    return `<div class="relative group">
+      <img src="${url}" class="w-20 h-20 object-cover rounded-lg border border-gray-200">
+      <button onclick="event.stopPropagation(); removePhoto(${i})"
+        class="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">x</button>
+    </div>`;
+  }).join('');
+}
+
+// Drag and drop
+const dropZone = document.getElementById('dropZone');
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('drag-over'); });
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const files = Array.from(e.dataTransfer.files);
+  addFiles(files);
+});
+
+// --- Upload photos to Cloudinary ---
+async function uploadPhotos() {
+  uploadedUrls = [];
+  for (const file of uploadedFiles) {
+    const formData = new FormData();
+    formData.append('photo', file);
+    const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    uploadedUrls.push(data.url);
+  }
+  return uploadedUrls;
+}
+
+// --- Phrases ---
+let currentPhraseStyle = '';
+
+async function loadPhraseStyles(mode) {
+  const resp = await fetch(`/api/phrase-styles/${mode}`);
+  const styles = await resp.json();
+  currentPhraseStyle = styles[0] || '';
+  renderStyleTabs(styles, currentPhraseStyle);
+}
+
+function renderStyleTabs(styles, activeStyle) {
+  const container = document.getElementById('phraseStyleTabs');
+  container.innerHTML = styles.map(s => {
+    const active = s === activeStyle;
+    return `<button onclick="selectPhraseStyle('${s}')" class="px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${active ? 'bg-blue-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">${s}</button>`;
+  }).join('');
+}
+
+async function selectPhraseStyle(style) {
+  currentPhraseStyle = style;
+  const styles = [...document.querySelectorAll('#phraseStyleTabs button')].map(b => b.textContent);
+  renderStyleTabs(styles, style);
+  const resp = await fetch(`/api/phrases/${currentMode}?style=${encodeURIComponent(style)}`);
+  const phrases = await resp.json();
+  renderPhrases(phrases);
+}
+
+// --- Personality Tags ---
+const PET_PERSONALITIES = [
+  '黏人', '高傲', '不理人', '愛撒嬌', '調皮搗蛋',
+  '膽小', '貪吃', '懶洋洋', '好奇寶寶', '傲嬌',
+];
+let selectedPersonalities = new Set();
+
+function renderPersonalityTags() {
+  const container = document.getElementById('personalityTags');
+  container.innerHTML = PET_PERSONALITIES.map(p => {
+    const active = selectedPersonalities.has(p);
+    return `<button type="button" onclick="togglePersonality('${p}')" class="px-3 py-1.5 rounded-full text-xs font-medium transition-all ${active ? 'bg-amber-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">${p}</button>`;
+  }).join('');
+}
+
+function togglePersonality(p) {
+  if (selectedPersonalities.has(p)) {
+    selectedPersonalities.delete(p);
+  } else {
+    selectedPersonalities.add(p);
+  }
+  renderPersonalityTags();
+}
+
+function getSelectedPersonalities() {
+  return [...selectedPersonalities].join('、');
+}
+
+// --- Target Audience ---
+async function loadAudiences() {
+  const resp = await fetch('/api/audiences');
+  audienceOptions = await resp.json();
+  renderAudienceTags();
+}
+
+function renderAudienceTags() {
+  const container = document.getElementById('audienceTags');
+  container.innerHTML = audienceOptions.map(a => {
+    const active = a.id === currentAudience;
+    return `<button type="button" onclick="selectAudience('${a.id}')" title="${a.desc}" class="px-3 py-1.5 rounded-full text-xs font-medium transition-all ${active ? 'bg-teal-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">${a.label}</button>`;
+  }).join('');
+}
+
+async function selectAudience(id) {
+  currentAudience = id;
+  renderAudienceTags();
+  // Load audience-specific phrases
+  const resp = await fetch(`/api/audience-phrases/${encodeURIComponent(id)}`);
+  const phrases = await resp.json();
+  renderPhrases(phrases);
+}
+
+// --- Drawing Style Tags ---
+function renderDrawingStyleTags() {
+  const container = document.getElementById('drawingStyleTags');
+  container.innerHTML = DRAWING_STYLES.map(s => {
+    const active = s === currentDrawingStyle;
+    return `<button type="button" onclick="setDrawingStyle('${s}')" class="px-3 py-1.5 rounded-full text-xs font-medium transition-all ${active ? 'bg-purple-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">${s}</button>`;
+  }).join('');
+}
+
+function setDrawingStyle(style) {
+  currentDrawingStyle = style;
+  renderDrawingStyleTags();
+}
+
+// --- AI Phrase Generation ---
+async function aiGeneratePhrases() {
+  const btn = document.getElementById('aiPhraseBtn');
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '生成中...';
+  btn.className = 'px-4 py-2 bg-gray-400 text-white text-sm font-medium rounded-xl cursor-not-allowed';
+
+  const characterName = document.getElementById('characterName').value.trim();
+  const personality = document.getElementById('characterPersonality').value.trim();
+
+  try {
+    const resp = await fetch('/api/generate-phrases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ characterName, personality }),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      alert('生成失敗：' + data.error);
+    } else {
+      renderPhrases(data.phrases);
+    }
+  } catch (err) {
+    alert('生成失敗：' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+    btn.className = 'px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-xl transition-colors';
+  }
+}
+
+async function loadPhrases(mode) {
+  await loadPhraseStyles(mode);
+  const resp = await fetch(`/api/phrases/${mode}?style=${encodeURIComponent(currentPhraseStyle)}`);
+  const phrases = await resp.json();
+  renderPhrases(phrases);
+}
+
+function renderPhrases(phrases) {
+  const grid = document.getElementById('phrasesGrid');
+  grid.innerHTML = phrases.map((p, i) =>
+    `<input type="text" class="phrase-input px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-400 outline-none" value="${p}" data-index="${i}">`
+  ).join('');
+}
+
+function getPhrases() {
+  return [...document.querySelectorAll('.phrase-input')].map(el => el.value.trim()).filter(Boolean);
+}
+
+function resetPhrases() { loadPhrases(currentMode); }
+
+// --- Saved Templates (localStorage) ---
+function getSavedTemplates() {
+  try {
+    return JSON.parse(localStorage.getItem('stickerTemplates') || '[]');
+  } catch { return []; }
+}
+
+function saveTemplate() {
+  const phrases = getPhrases();
+  if (phrases.length < 12) { alert('請先填滿 12 句文字'); return; }
+  const name = prompt('幫這組模板取個名字：');
+  if (!name || !name.trim()) return;
+
+  const templates = getSavedTemplates();
+  // Check for duplicate name
+  const existing = templates.findIndex(t => t.name === name.trim());
+  if (existing >= 0) {
+    if (!confirm(`「${name.trim()}」已存在，要覆蓋嗎？`)) return;
+    templates[existing].phrases = phrases;
+  } else {
+    templates.push({ name: name.trim(), phrases });
+  }
+  localStorage.setItem('stickerTemplates', JSON.stringify(templates));
+  renderSavedTemplates();
+}
+
+function loadTemplate(index) {
+  const templates = getSavedTemplates();
+  if (templates[index]) {
+    renderPhrases(templates[index].phrases);
+  }
+}
+
+function deleteTemplate(index, e) {
+  e.stopPropagation();
+  const templates = getSavedTemplates();
+  if (!confirm(`確定刪除模板「${templates[index].name}」？`)) return;
+  templates.splice(index, 1);
+  localStorage.setItem('stickerTemplates', JSON.stringify(templates));
+  renderSavedTemplates();
+}
+
+function renderSavedTemplates() {
+  const templates = getSavedTemplates();
+  const container = document.getElementById('savedTemplatesRow');
+  if (templates.length === 0) {
+    container.classList.add('hidden');
+    return;
+  }
+  container.classList.remove('hidden');
+  container.innerHTML = templates.map((t, i) =>
+    `<button onclick="loadTemplate(${i})" class="group relative px-3 py-1.5 rounded-lg text-xs font-medium bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-all">
+      ${t.name}
+      <span onclick="deleteTemplate(${i}, event)" class="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-400 text-white rounded-full text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">x</span>
+    </button>`
+  ).join('');
+}
+
+// --- Generate ---
+async function generate() {
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = true;
+  btn.textContent = '送出中...';
+  btn.className = 'w-full py-3.5 bg-gray-400 text-white font-medium rounded-xl text-lg cursor-not-allowed';
+
+  hideSection('errorSection');
+  hideSection('resultSection');
+  showSection('progressSection');
+
+  const description = document.getElementById('description').value.trim();
+  const phrases = getPhrases();
+
+  // Build personality: from tags (pet/dog) or character input
+  let personality = '';
+  let drawingStyle = '';
+  if (currentMode === 'character') {
+    const charPersonality = document.getElementById('characterPersonality').value.trim();
+    const charName = document.getElementById('characterName').value.trim();
+    personality = [charName ? `角色：${charName}` : '', charPersonality].filter(Boolean).join('，');
+    drawingStyle = currentDrawingStyle;
+  } else {
+    personality = getSelectedPersonalities();
+  }
+
+  // Require photo upload
+  if (uploadedFiles.length === 0) {
+    showError('請至少上傳一張照片');
+    return;
+  }
+
+  try {
+    // Step 1: Upload photos
+    let photoUrls = [];
+    if (uploadedFiles.length > 0) {
+      setProgress(3, '上傳照片中...');
+      photoUrls = await uploadPhotos();
+      setProgress(10, '照片上傳完成，送出生圖任務...');
+    } else {
+      setProgress(5, '送出生圖任務...');
+    }
+
+    // Step 2: Call generate API
+    const resp = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: currentMode,
+        phrases,
+        description,
+        personality,
+        drawingStyle,
+        audience: currentAudience,
+        photoUrls,
+      }),
+    });
+
+    const data = await resp.json();
+    if (data.error) { showError(data.error); return; }
+
+    currentTaskId = data.taskId;
+    setProgress(15, '任務已建立，等待 AI 生圖...');
+    startPolling();
+
+  } catch (err) {
+    showError(`失敗: ${err.message}`);
+  }
+}
+
+// --- Polling ---
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollStatus, 4000);
+}
+
+async function pollStatus() {
+  if (!currentTaskId) return;
+  try {
+    const resp = await fetch(`/api/status/${currentTaskId}`);
+    const data = await resp.json();
+
+    if (data.state === 'done') {
+      clearInterval(pollTimer); pollTimer = null;
+      setProgress(100, '完成！');
+      setTimeout(() => showResults(data), 500);
+      return;
+    }
+    if (data.state === 'retry') {
+      // KIE failed, backend auto-retried with fal.ai — switch to new task
+      currentTaskId = data.newTaskId;
+      setProgress(15, data.message || '自動切換備用服務重試...');
+      return;
+    }
+    if (data.state === 'fail' || data.state === 'error') {
+      clearInterval(pollTimer); pollTimer = null;
+      showError(data.message || '生圖失敗');
+      return;
+    }
+
+    const progress = Math.min(90, 15 + (data.progress || 0) * 0.75);
+    const stateLabels = { waiting: '排隊等待中...', queuing: '排隊等待中...', generating: 'AI 正在生圖...', success: '下載並裁切中...' };
+    setProgress(progress, stateLabels[data.state] || `處理中 (${data.state})...`);
+  } catch (err) {
+    console.warn('Poll error:', err);
+  }
+}
+
+// --- Results ---
+function showResults(data) {
+  hideSection('progressSection');
+  document.getElementById('gridPreview').src = `/api/preview/${currentTaskId}/grid_raw.png`;
+  const grid = document.getElementById('stickerGrid');
+  grid.innerHTML = data.stickers.map(f =>
+    `<div class="checkerboard rounded-lg border border-gray-200 p-1"><img src="/api/preview/${currentTaskId}/${f}" alt="${f}" class="w-full hover:scale-105 transition-transform cursor-pointer" onclick="window.open(this.src)"></div>`
+  ).join('');
+  showSection('resultSection');
+  resetGenerateBtn();
+  loadHistory();
+}
+
+// --- Download ---
+function downloadZip() {
+  if (!currentTaskId) return;
+  window.location.href = `/api/download/${currentTaskId}`;
+}
+
+// --- UI helpers ---
+function setProgress(pct, text) {
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressText').textContent = text;
+}
+
+function showError(msg) {
+  hideSection('progressSection');
+  document.getElementById('errorText').textContent = msg;
+  showSection('errorSection');
+  resetGenerateBtn();
+}
+
+function showSection(id) { document.getElementById(id).classList.remove('hidden'); }
+function hideSection(id) { document.getElementById(id).classList.add('hidden'); }
+
+function resetGenerateBtn() {
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = false;
+  btn.textContent = '生成貼圖';
+  btn.className = 'w-full py-3.5 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-xl transition-colors text-lg';
+}
+
+function resetUI() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  currentTaskId = null;
+  uploadedFiles = [];
+  uploadedUrls = [];
+  renderPhotoPreview();
+  hideSection('progressSection');
+  hideSection('errorSection');
+  hideSection('resultSection');
+  resetGenerateBtn();
+}
+
+// --- History Gallery ---
+async function loadHistory() {
+  try {
+    const resp = await fetch('/api/tasks');
+    const tasks = await resp.json();
+    const list = document.getElementById('historyList');
+    const empty = document.getElementById('historyEmpty');
+
+    if (tasks.length === 0) {
+      list.innerHTML = '';
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+
+    const modeLabels = { pet: '貓咪', dog: '狗狗', kid: '小孩', unknown: '' };
+    list.innerHTML = tasks.map(t => {
+      const date = new Date(t.createdAt * 1000);
+      const dateStr = `${date.getMonth()+1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2,'0')}`;
+      const label = modeLabels[t.mode] || t.mode;
+      const desc = t.description || '';
+      const headerParts = [label, desc].filter(Boolean).join(' · ');
+      const stickersHtml = t.stickers.map(f =>
+        `<div class="checkerboard rounded-lg border border-gray-200 p-1"><img src="/api/preview/${t.taskId}/${f}" alt="${f}" class="w-full hover:scale-105 transition-transform cursor-pointer" onclick="window.open(this.src)" loading="lazy"></div>`
+      ).join('');
+      return `<div class="bg-white rounded-2xl border border-gray-200 p-4">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm font-medium text-gray-700">${headerParts}</span>
+          <span class="text-xs text-gray-400">${dateStr}</span>
+        </div>
+        <div class="sticker-grid">${stickersHtml}</div>
+        <div class="mt-3 flex gap-3">
+          <button onclick="window.location.href='/api/download/${t.taskId}'" class="text-xs text-blue-500 hover:text-blue-700">下載 ZIP</button>
+          ${t.canRegenerate ? `<button onclick="regenerateTask('${t.taskId}')" class="text-xs text-purple-500 hover:text-purple-700">重新生成</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    console.warn('Failed to load history:', err);
+  }
+}
+
+async function regenerateTask(taskId) {
+  if (!confirm('使用相同的照片和文字重新生成貼圖？')) return;
+  try {
+    const resp = await fetch(`/api/tasks/${taskId}/metadata`);
+    if (!resp.ok) { alert('此紀錄沒有保存設定，無法重新生成'); return; }
+    const meta = await resp.json();
+
+    // Scroll to top and show progress
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    hideSection('errorSection');
+    hideSection('resultSection');
+    showSection('progressSection');
+    setProgress(5, '使用歷史設定重新生成...');
+
+    const generateResp = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: meta.mode,
+        phrases: meta.phrases,
+        description: meta.description || '',
+        personality: meta.personality || '',
+        drawingStyle: meta.drawingStyle || '',
+        audience: meta.audience || '',
+        photoUrls: meta.photoUrls || [],
+      }),
+    });
+
+    const data = await generateResp.json();
+    if (data.error) { showError(data.error); return; }
+
+    currentTaskId = data.taskId;
+    setProgress(15, '任務已建立，等待 AI 生圖...');
+    startPolling();
+  } catch (err) {
+    showError('重新生成失敗：' + err.message);
+  }
+}
+
+// --- Init ---
+document.addEventListener('DOMContentLoaded', () => {
+  loadAudiences();
+  setMode('pet');
+  renderSavedTemplates();
+  loadHistory();
+});
+</script>
+</body>
+</html>

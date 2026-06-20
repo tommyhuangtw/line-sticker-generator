@@ -1,0 +1,29 @@
+# --- 機密：絕對不能 commit ---
+.env
+*.env
+!.env.example
+
+# --- 個人原始照片 ---
+IMG_*.JPG
+IMG_*.jpeg
+IMG_*.png
+
+# --- 程式產出 / 測試垃圾（會自動重新產生）---
+output/
+test_output/
+test_final/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- 系統 ---
+.DS_Store
+
+# --- 編輯器 ---
+.vscode/
+.idea/
