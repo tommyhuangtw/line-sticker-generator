@@ -739,10 +739,12 @@ async function loadHistory() {
     }
     empty.classList.add('hidden');
 
-    const modeLabels = { pet: '貓咪', dog: '狗狗', kid: '小孩', unknown: '' };
+    const modeLabels = { pet: '貓咪', dog: '狗狗', kid: '小孩', character: '角色', unknown: '' };
     list.innerHTML = tasks.map(t => {
       const date = new Date(t.createdAt * 1000);
-      const dateStr = `${date.getMonth()+1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2,'0')}`;
+      const dateStr = t.isExample
+        ? '<span class="px-2 py-0.5 rounded-full bg-purple-100 text-purple-600">範例 Example</span>'
+        : `${date.getMonth()+1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2,'0')}`;
       const label = modeLabels[t.mode] || t.mode;
       const desc = t.description || '';
       const headerParts = [label, desc].filter(Boolean).join(' · ');

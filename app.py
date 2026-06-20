@@ -36,6 +36,18 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max upload
 OUTPUT_BASE = Path(__file__).parent / "output"
 OUTPUT_BASE.mkdir(exist_ok=True)
 
+# Bundled read-only example sticker sets (shown in the history gallery so a
+# fresh clone isn't empty). Served from examples/ instead of output/.
+EXAMPLES_BASE = Path(__file__).parent / "examples"
+
+
+def resolve_task_dir(task_id):
+    """Return the directory for a task id, checking output/ then examples/."""
+    task_dir = OUTPUT_BASE / task_id
+    if task_dir.exists():
+        return task_dir
+    return EXAMPLES_BASE / task_id
+
 CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "")
 CLOUDINARY_API_KEY = os.environ.get("CLOUDINARY_API_KEY", "")
 CLOUDINARY_API_SECRET = os.environ.get("CLOUDINARY_API_SECRET", "")
@@ -390,7 +402,7 @@ def status(task_id):
 @app.route("/api/preview/<task_id>/<path:filename>")
 def preview(task_id, filename):
     """Serve a generated sticker image for preview."""
-    task_dir = OUTPUT_BASE / task_id
+    task_dir = resolve_task_dir(task_id)
 
     # Could be in stickers/ subdirectory or root
     if (task_dir / "stickers" / filename).exists():
@@ -404,7 +416,7 @@ def preview(task_id, filename):
 @app.route("/api/download/<task_id>")
 def download(task_id):
     """Download all stickers as a ZIP file."""
-    task_dir = OUTPUT_BASE / task_id
+    task_dir = resolve_task_dir(task_id)
     sticker_dir = task_dir / "stickers"
 
     if not sticker_dir.exists():
@@ -432,45 +444,58 @@ def download(task_id):
     )
 
 
+def _build_task_entry(task_dir, is_example=False):
+    """Build a gallery entry dict from a task directory, or None if incomplete."""
+    sticker_dir = task_dir / "stickers"
+    if not sticker_dir.exists() or not any(sticker_dir.glob("*.png")):
+        return None
+
+    meta_path = task_dir / "metadata.json"
+    if meta_path.exists():
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    else:
+        meta = {"mode": "unknown", "createdAt": task_dir.stat().st_mtime}
+
+    sticker_files = sorted(f.name for f in sticker_dir.glob("*.png"))
+    photo_urls = meta.get("photoUrls", [])
+    return {
+        "taskId": task_dir.name,
+        "mode": meta.get("mode", "unknown"),
+        "description": meta.get("description", ""),
+        "createdAt": meta.get("createdAt", task_dir.stat().st_mtime),
+        "stickers": sticker_files,
+        "canRegenerate": bool(photo_urls) and bool(meta.get("phrases")),
+        "isExample": is_example,
+    }
+
+
 @app.route("/api/tasks")
 def list_tasks():
-    """List all completed tasks with metadata for the history gallery."""
+    """List all completed tasks plus bundled examples for the history gallery."""
     tasks = []
     for task_dir in OUTPUT_BASE.iterdir():
-        if not task_dir.is_dir():
-            continue
-        sticker_dir = task_dir / "stickers"
-        if not sticker_dir.exists() or not any(sticker_dir.glob("*.png")):
-            continue
+        if task_dir.is_dir():
+            entry = _build_task_entry(task_dir)
+            if entry:
+                tasks.append(entry)
 
-        task_id = task_dir.name
-        meta_path = task_dir / "metadata.json"
-        if meta_path.exists():
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-        else:
-            meta = {"mode": "unknown", "createdAt": task_dir.stat().st_mtime}
+    if EXAMPLES_BASE.exists():
+        for task_dir in EXAMPLES_BASE.iterdir():
+            if task_dir.is_dir():
+                entry = _build_task_entry(task_dir, is_example=True)
+                if entry:
+                    tasks.append(entry)
 
-        sticker_files = sorted(f.name for f in sticker_dir.glob("*.png"))
-        photo_urls = meta.get("photoUrls", [])
-        tasks.append({
-            "taskId": task_id,
-            "mode": meta.get("mode", "unknown"),
-            "description": meta.get("description", ""),
-            "createdAt": meta.get("createdAt", task_dir.stat().st_mtime),
-            "stickers": sticker_files,
-            "canRegenerate": bool(photo_urls) and bool(meta.get("phrases")),
-        })
-
-    # Sort by creation time, newest first
-    tasks.sort(key=lambda t: t["createdAt"], reverse=True)
+    # User tasks first (newest first), bundled examples always last.
+    tasks.sort(key=lambda t: (t["isExample"], -t["createdAt"]))
     return jsonify(tasks)
 
 
 @app.route("/api/tasks/<task_id>/metadata")
 def get_task_metadata(task_id):
     """Return full metadata for a task (for re-generation)."""
-    task_dir = OUTPUT_BASE / task_id
+    task_dir = resolve_task_dir(task_id)
     meta_path = task_dir / "metadata.json"
     if not meta_path.exists():
         return jsonify({"error": "此紀錄沒有保存設定，無法重新生成"}), 404
