@@ -662,6 +662,11 @@ async function pollStatus() {
       return;
     }
 
+    if (data.state === 'portrait') {
+      setProgress(95, '製作主圖與聊天室圖示...');
+      return;
+    }
+
     const progress = Math.min(90, 15 + (data.progress || 0) * 0.75);
     const stateLabels = { waiting: '排隊等待中...', queuing: '排隊等待中...', generating: 'AI 正在生圖...', success: '下載並裁切中...' };
     setProgress(progress, stateLabels[data.state] || `處理中 (${data.state})...`);

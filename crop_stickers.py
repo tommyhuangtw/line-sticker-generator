@@ -28,9 +28,12 @@ def main():
     parser.add_argument("--cols", type=int, default=4, help="grid 列數（預設 4）")
     parser.add_argument("--output", "-o", default="./output", help="輸出資料夾（預設 ./output）")
     parser.add_argument("--remove-bg", action="store_true",
-                        help="移除灰色背景（適用於上架 LINE Creators Market）")
+                        help="移除背景（預設行為，上架需透明背景）")
+    parser.add_argument("--keep-bg", action="store_true",
+                        help="保留背景（LINE 拍貼自用，不去背）")
 
     args = parser.parse_args()
+    remove_bg = not args.keep_bg
 
     input_path = Path(args.image)
     if not input_path.exists():
@@ -40,7 +43,7 @@ def main():
     output_dir = Path(args.output)
 
     print(f"載入圖片：{input_path}")
-    process_grid_image(input_path, output_dir, args.rows, args.cols, args.remove_bg)
+    process_grid_image(input_path, output_dir, args.rows, args.cols, remove_bg)
 
     sticker_dir = output_dir / "stickers"
     print(f"\n完成！貼圖已存到：{output_dir.resolve()}")

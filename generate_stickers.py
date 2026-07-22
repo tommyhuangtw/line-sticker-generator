@@ -298,10 +298,48 @@ def build_prompt(mode: str, phrases: list[str], custom_description: str = "",
 ・裝飾也使用白色手繪風格
 ・不要加太多，讓貼圖看起來輕鬆舒服
 
+【品牌規則】
+・不要出現任何公司或品牌的 logo、商標、名稱、字樣
+
 【格式要求】
 ・輸出為一張大圖，4 列 x 3 行排列
 ・每張貼圖之間必須有明顯的亮綠色間隔，間距至少佔格子寬度的 5%
 ・貼圖內容不可以超出自己的格子範圍，不可以和相鄰貼圖重疊
+・亮綠色背景（#00B140），像綠幕一樣方便後續去背
+"""
+    return prompt
+
+
+def build_portrait_prompt(mode: str, custom_description: str = "",
+                          personality: str = "", drawing_style: str = "") -> str:
+    """Build a prompt for a single clean, text-free character image.
+
+    Used to generate the LINE main (240x240) and tab (96x74) images, which
+    must show just the character with no text.
+    """
+    if mode == "pet":
+        subject_desc = "寵物（貓咪或狗狗）"
+    elif mode == "character":
+        subject_desc = "虛擬角色"
+    else:
+        subject_desc = "小朋友"
+
+    style_instruction = DRAWING_STYLES.get(drawing_style, "主體要寫實感")
+
+    desc_line = f"\n特徵描述：{custom_description}" if custom_description else ""
+    personality_line = f"\n個性特徵：{personality}。" if personality else ""
+
+    prompt = f"""請生成一張單一{subject_desc}的貼圖角色圖，角色置中、佔畫面主要區域，亮綠色背景（green screen）。{desc_line}{personality_line}
+
+【繪製規則】
+・{style_instruction}，正面、開心可愛的表情，單一自然姿勢
+・主體要有白色描邊效果（像貼紙剪下來的感覺）
+・只畫角色本身，直接放在純亮綠色背景上
+
+【嚴格規則】
+・畫面上絕對不可以出現任何文字、字母、數字
+・不要任何背景場景、家具、棉被、枕頭、坐墊、地板、道具
+・只有一個角色，置中，四周留出綠色空間
 ・亮綠色背景（#00B140），像綠幕一樣方便後續去背
 """
     return prompt
@@ -400,13 +438,13 @@ def api_request(method: str, path: str, data: dict = None, params: dict = None) 
         raise StickerError(f"連線錯誤: {e.reason}")
 
 
-def create_task_text_to_image(prompt: str) -> str:
+def create_task_text_to_image(prompt: str, aspect_ratio: str = "4:3") -> str:
     """Create a text-to-image task, return task ID."""
     payload = {
         "model": "gpt-image-2-text-to-image",
         "input": {
             "prompt": prompt,
-            "aspect_ratio": "4:3",
+            "aspect_ratio": aspect_ratio,
             "resolution": "2K",
         }
     }
@@ -419,14 +457,15 @@ def create_task_text_to_image(prompt: str) -> str:
     return task_id
 
 
-def create_task_image_to_image(prompt: str, image_urls: list[str]) -> str:
+def create_task_image_to_image(prompt: str, image_urls: list[str],
+                               aspect_ratio: str = "4:3") -> str:
     """Create an image-to-image task, return task ID."""
     payload = {
         "model": "gpt-image-2-image-to-image",
         "input": {
             "prompt": prompt,
             "input_urls": image_urls,
-            "aspect_ratio": "4:3",
+            "aspect_ratio": aspect_ratio,
             "resolution": "2K",
         }
     }
@@ -470,12 +509,13 @@ def _fal_request(method: str, url: str, data: dict = None) -> dict:
         raise StickerError(f"fal.ai 連線錯誤: {e.reason}")
 
 
-def fal_create_task_image_to_image(prompt: str, image_urls: list[str]) -> str:
+def fal_create_task_image_to_image(prompt: str, image_urls: list[str],
+                                   image_size: str = "landscape_4_3") -> str:
     """Create an image-to-image task on fal.ai, return request ID."""
     payload = {
         "prompt": prompt,
         "image_urls": image_urls,
-        "image_size": "landscape_4_3",
+        "image_size": image_size,
         "quality": "high",
         "num_images": 1,
         "output_format": "png",
@@ -487,11 +527,12 @@ def fal_create_task_image_to_image(prompt: str, image_urls: list[str]) -> str:
     return request_id
 
 
-def fal_create_task_text_to_image(prompt: str) -> str:
+def fal_create_task_text_to_image(prompt: str,
+                                  image_size: str = "landscape_4_3") -> str:
     """Create a text-to-image task on fal.ai, return request ID."""
     payload = {
         "prompt": prompt,
-        "image_size": "landscape_4_3",
+        "image_size": image_size,
         "quality": "high",
         "num_images": 1,
         "output_format": "png",
@@ -617,25 +658,50 @@ def _find_gap_centers(ratios: list[float], num_cells: int,
                       total_length: int) -> list[int]:
     """Find the center positions of gaps between cells.
 
-    Searches near each expected boundary for the column/row with the
-    highest background ratio — that's the gap center.
+    Near each expected boundary, find the *widest contiguous band* of
+    background-coloured rows/columns (the real green gap) and cut through its
+    middle. Using the widest band — rather than the single highest-bg
+    position — keeps the cut in the centre of the gap instead of latching onto
+    a thin green sliver beside a decoration (?, !!, stars, zzz) that would
+    otherwise pull a neighbour's mark into this cell. It also yields more
+    uniform cell sizes.
     """
     cell_size = total_length / num_cells
-    search_window = int(cell_size * 0.2)  # look +/- 20% of cell size
+    search_window = int(cell_size * 0.25)  # look +/- 25% of cell size
+    gap_thresh = 0.85  # a row/col counts as "gap" if >=85% of it is background
 
     gap_centers = []
     for i in range(1, num_cells):
         expected = int(i * cell_size)
-        search_start = max(0, expected - search_window)
-        search_end = min(len(ratios), expected + search_window)
+        start = max(0, expected - search_window)
+        end = min(len(ratios), expected + search_window)
 
-        best_pos = expected
-        best_ratio = -1.0
-        for pos in range(search_start, search_end):
-            if ratios[pos] > best_ratio:
-                best_ratio = ratios[pos]
-                best_pos = pos
-        gap_centers.append(best_pos)
+        # Scan the window for the longest run of consecutive gap positions.
+        best_center = None
+        best_len = 0
+        run_start = None
+        for pos in range(start, end + 1):
+            is_gap = pos < end and ratios[pos] >= gap_thresh
+            if is_gap:
+                if run_start is None:
+                    run_start = pos
+            elif run_start is not None:
+                run_len = pos - run_start
+                if run_len > best_len:
+                    best_len = run_len
+                    best_center = (run_start + pos - 1) // 2
+                run_start = None
+
+        if best_center is not None:
+            gap_centers.append(best_center)
+        else:
+            # No clear green band — fall back to the highest-bg position,
+            # then to the uniform expected boundary.
+            best_pos, best_ratio = expected, -1.0
+            for pos in range(start, end):
+                if ratios[pos] > best_ratio:
+                    best_ratio, best_pos = ratios[pos], pos
+            gap_centers.append(best_pos)
 
     return gap_centers
 
@@ -683,13 +749,15 @@ def _clean_edges(img: Image.Image, bg_color: tuple, tolerance: int = 35) -> Imag
     w, h = img.size
     bg_rgba = (*bg_color, 255)
 
-    # Scan up to 4% of dimension from each edge (reduced to preserve text)
-    edge_h = max(8, int(h * 0.04))
-    edge_w = max(8, int(w * 0.04))
+    # Scan up to 3% of dimension from each edge (reduced to preserve text)
+    edge_h = max(8, int(h * 0.03))
+    edge_w = max(8, int(w * 0.03))
 
-    # Only clean rows/cols that are almost entirely background (>90%)
-    # This avoids wiping out text which typically occupies <50% of a row
-    clean_thresh = 0.90
+    # Only clean rows/cols that are almost entirely background (>99%).
+    # Text strokes and decorations (?, !!, ~) that reach close to a cell edge
+    # occupy more than 1% of a border row/col, so a high threshold stops the
+    # scan at the first line that holds real content instead of nibbling it.
+    clean_thresh = 0.99
 
     # Horizontal edges (top/bottom) — scan rows
     for y_range in [range(h - 1, h - edge_h - 1, -1),  # bottom
@@ -1018,29 +1086,67 @@ def process_grid_image(grid_path: Path, output_dir: Path, rows=3, cols=4, remove
             sticker = fit_to_line_size(sticker)
 
         filename = f"{i+1:02d}.png"
-        sticker.save(sticker_dir / filename, "PNG")
+        sticker.save(sticker_dir / filename, "PNG", dpi=(72, 72))
         stickers.append(sticker)
         print(f"  ✓ {filename} ({sticker.size[0]}x{sticker.size[1]})")
 
-    # Main & tab images
+    # Main & tab images — fallback source is sticker #1 (carries its phrase
+    # text, which LINE disallows). process_portrait_image() overwrites these
+    # with a text-free portrait when that extra generation succeeds.
     if stickers:
-        main = Image.new("RGBA", MAIN_IMAGE_SIZE, (0, 0, 0, 0))
-        thumb = stickers[0].copy()
-        thumb.thumbnail((220, 220), Image.LANCZOS)
-        main.paste(thumb, ((240-thumb.width)//2, (240-thumb.height)//2),
-                   thumb if thumb.mode == "RGBA" else None)
-        main.save(output_dir / "main.png", "PNG")
-        print(f"  ✓ main.png (240x240)")
-
-        tab = Image.new("RGBA", TAB_IMAGE_SIZE, (0, 0, 0, 0))
-        thumb2 = stickers[0].copy()
-        thumb2.thumbnail((86, 64), Image.LANCZOS)
-        tab.paste(thumb2, ((96-thumb2.width)//2, (74-thumb2.height)//2),
-                  thumb2 if thumb2.mode == "RGBA" else None)
-        tab.save(output_dir / "tab.png", "PNG")
-        print(f"  ✓ tab.png (96x74)")
+        make_main_and_tab(stickers[0], output_dir)
 
     return stickers
+
+
+def make_main_and_tab(source: Image.Image, output_dir: Path):
+    """Write main.png (240x240) and tab.png (96x74) from a single image.
+
+    LINE requires both to be transparent PNGs with the character centred and
+    no text.
+    """
+    if source.mode != "RGBA":
+        source = source.convert("RGBA")
+
+    main = Image.new("RGBA", MAIN_IMAGE_SIZE, (0, 0, 0, 0))
+    thumb = source.copy()
+    thumb.thumbnail((220, 220), Image.LANCZOS)
+    main.paste(thumb, ((MAIN_IMAGE_SIZE[0]-thumb.width)//2,
+                       (MAIN_IMAGE_SIZE[1]-thumb.height)//2), thumb)
+    main.save(output_dir / "main.png", "PNG", dpi=(72, 72))
+    print(f"  ✓ main.png ({MAIN_IMAGE_SIZE[0]}x{MAIN_IMAGE_SIZE[1]})")
+
+    tab = Image.new("RGBA", TAB_IMAGE_SIZE, (0, 0, 0, 0))
+    thumb2 = source.copy()
+    thumb2.thumbnail((86, 64), Image.LANCZOS)
+    tab.paste(thumb2, ((TAB_IMAGE_SIZE[0]-thumb2.width)//2,
+                       (TAB_IMAGE_SIZE[1]-thumb2.height)//2), thumb2)
+    tab.save(output_dir / "tab.png", "PNG", dpi=(72, 72))
+    print(f"  ✓ tab.png ({TAB_IMAGE_SIZE[0]}x{TAB_IMAGE_SIZE[1]})")
+
+
+def process_portrait_image(portrait_path: Path, output_dir: Path,
+                           remove_bg: bool = True):
+    """Turn a single text-free character image into main.png and tab.png.
+
+    Trims the green screen away so the character fills the frame, then hands
+    off to make_main_and_tab().
+    """
+    img = Image.open(portrait_path)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    if remove_bg:
+        img = remove_bg_simple(img)
+        # Crop to the character so it isn't a speck floating in empty space.
+        bbox = img.getbbox()
+        if bbox:
+            img = img.crop(bbox)
+    else:
+        img = img.convert("RGBA")
+
+    make_main_and_tab(img, output_dir)
+    return img
 
 
 def main():
@@ -1056,12 +1162,14 @@ def main():
     parser.add_argument("--phrases", help="自訂文字，逗號分隔（例：汪汪,肚子餓,想睡覺）")
     parser.add_argument("--description", default="", help="額外描述主角特徵（例：橘貓、短毛、藍色項圈）")
     parser.add_argument("--output", "-o", default="./output", help="輸出資料夾")
-    parser.add_argument("--remove-bg", action="store_true", help="移除灰色背景（上架用）")
+    parser.add_argument("--remove-bg", action="store_true", help="移除背景（預設行為，上架需透明背景）")
+    parser.add_argument("--keep-bg", action="store_true", help="保留背景（LINE 拍貼自用，不去背）")
     parser.add_argument("--skip-generate", help="跳過生圖，直接裁切已有的圖片")
     parser.add_argument("--rows", type=int, default=3, help="Grid 行數")
     parser.add_argument("--cols", type=int, default=4, help="Grid 列數")
 
     args = parser.parse_args()
+    remove_bg = not args.keep_bg
 
     if not KIE_API_KEY:
         print("錯誤：請在 .env 中設定 KIE_AI_API_KEY")
@@ -1092,7 +1200,7 @@ def main():
         if not grid_path.exists():
             print(f"找不到圖片：{grid_path}")
             sys.exit(1)
-        process_grid_image(grid_path, output_dir, args.rows, args.cols, args.remove_bg)
+        process_grid_image(grid_path, output_dir, args.rows, args.cols, remove_bg)
         print(f"\n完成！貼圖已存到：{output_dir.resolve()}")
         return
 
@@ -1124,7 +1232,7 @@ def main():
     download_image(image_urls[0], grid_path)
 
     # Crop into individual stickers
-    process_grid_image(grid_path, output_dir, args.rows, args.cols, args.remove_bg)
+    process_grid_image(grid_path, output_dir, args.rows, args.cols, remove_bg)
 
     print(f"\n{'='*50}")
     print(f"完成！共生成 {args.rows * args.cols} 張貼圖")

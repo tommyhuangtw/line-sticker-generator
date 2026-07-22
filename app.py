@@ -27,7 +27,7 @@ from generate_stickers import (
     create_task_text_to_image, create_task_image_to_image,
     fal_create_task_text_to_image, fal_create_task_image_to_image,
     fal_check_task_status,
-    download_image, process_grid_image,
+    download_image, process_grid_image, process_portrait_image,
 )
 
 app = Flask(__name__)
@@ -195,6 +195,115 @@ def upload_photo():
         return jsonify({"error": str(e)}), 500
 
 
+# How long to keep polling the de-text task before giving up and keeping the
+# sticker-#1 main/tab. Measured from when the task was submitted.
+PORTRAIT_WAIT_SECONDS = 180
+
+PORTRAIT_PROMPT = """請把這張貼圖裡的文字完全移除，只保留角色本身。
+
+【嚴格規則】
+・角色的外觀、配色、線條、姿勢、表情都要跟原圖完全一致，不要重畫、不要改風格
+・移除畫面上所有文字、字母、數字、對話框，並把原本被文字蓋住的地方自然補完
+・角色置中、佔畫面主要區域，四周留出背景空間
+・背景改成單一的純亮綠色（#00B140），像綠幕一樣乾淨，方便後續去背
+"""
+
+
+def save_meta(task_dir: Path, meta: dict):
+    """Persist metadata.json for a task."""
+    with open(task_dir / "metadata.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+
+def submit_portrait_task(task_dir: Path, meta: dict) -> dict:
+    """Ask the provider to strip the text from sticker #1 for main/tab.
+
+    Feeding back an already-generated sticker (rather than generating a fresh
+    portrait from the photos) keeps the character identical to the set. The
+    raw crop is used because it still has the green background intact.
+
+    Records portraitTaskId/portraitProvider on meta, or portraitError when it
+    could not be submitted. Never raises — main/tab already exist as fallback.
+    """
+    source = task_dir / "raw" / "01.png"
+    if not source.exists():
+        meta["portraitError"] = "找不到 raw/01.png，無法產生無文字主圖"
+        return meta
+
+    try:
+        with open(source, "rb") as f:
+            public_url = _optimize_cloudinary_url(
+                upload_to_cloudinary(f.read(), "sticker01.png"))
+    except StickerError as e:
+        meta["portraitError"] = f"上傳貼圖到 Cloudinary 失敗：{e}"
+        return meta
+
+    for provider, submit in (
+        ("kie", lambda: create_task_image_to_image(
+            PORTRAIT_PROMPT, [public_url], aspect_ratio="1:1")),
+        ("fal", lambda: fal_create_task_image_to_image(
+            PORTRAIT_PROMPT, [public_url], image_size="square_hd")),
+    ):
+        if not (KIE_API_KEY if provider == "kie" else FAL_API_KEY):
+            continue
+        try:
+            meta["portraitTaskId"] = submit()
+            meta["portraitProvider"] = provider
+            meta["portraitDeadline"] = time.time() + PORTRAIT_WAIT_SECONDS
+            meta.pop("portraitError", None)
+            return meta
+        except StickerError as e:
+            meta["portraitError"] = f"{provider} 去文字任務提交失敗：{e}"
+
+    return meta
+
+
+def poll_portrait_task(task_dir: Path, meta: dict) -> bool:
+    """Check the de-text task once; apply it to main/tab when ready.
+
+    Returns True when the portrait step has settled (succeeded, failed, or
+    timed out) and the caller should report the task as done. Returns False
+    while it is still generating.
+    """
+    portrait_id = meta.get("portraitTaskId")
+    provider = meta.get("portraitProvider", "kie")
+
+    def settle(error: str = None):
+        meta.pop("portraitTaskId", None)
+        meta.pop("portraitDeadline", None)
+        if error:
+            meta["portraitError"] = error
+        else:
+            meta["portraitApplied"] = True
+        save_meta(task_dir, meta)
+        return True
+
+    try:
+        data = (fal_check_task_status(portrait_id) if provider == "fal"
+                else check_task_status(portrait_id))
+    except StickerError as e:
+        return settle(f"查詢去文字任務失敗：{e}")
+
+    state = data.get("state", "unknown")
+    if state == "fail":
+        return settle(f"去文字生圖失敗：{data.get('failMsg', '未知原因')}")
+    if state != "success":
+        if time.time() >= meta.get("portraitDeadline", 0):
+            return settle("去文字生圖逾時，主圖沿用第一張貼圖")
+        return False
+
+    try:
+        urls = json.loads(data.get("resultJson", "{}")).get("resultUrls", [])
+        if not urls:
+            return settle("去文字任務沒有回傳圖片 URL")
+        portrait_path = task_dir / "portrait_raw.png"
+        download_image(urls[0], portrait_path)
+        process_portrait_image(portrait_path, task_dir, remove_bg=True)
+        return settle()
+    except Exception as e:
+        return settle(f"處理無文字主圖失敗：{e}")
+
+
 @app.route("/api/generate", methods=["POST"])
 def generate():
     """Start a sticker generation task."""
@@ -288,11 +397,11 @@ def status(task_id):
     # Determine which provider to use for status check
     task_dir = OUTPUT_BASE / task_id
     meta_path = task_dir / "metadata.json"
-    provider = "kie"
+    meta = {}
     if meta_path.exists():
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
-        provider = meta.get("provider", "kie")
+    provider = meta.get("provider", "kie")
 
     try:
         if provider == "fal":
@@ -361,14 +470,19 @@ def status(task_id):
         task_dir = OUTPUT_BASE / task_id
         sticker_dir = task_dir / "stickers"
 
-        # If already cropped, just return the file list
-        if sticker_dir.exists() and any(sticker_dir.iterdir()):
-            sticker_files = sorted(f.name for f in sticker_dir.glob("*.png"))
+        def finished():
             return jsonify({
                 "state": "done",
-                "stickers": sticker_files,
+                "stickers": sorted(f.name for f in sticker_dir.glob("*.png")),
                 "gridImage": "grid_raw.png",
+                "portraitError": meta.get("portraitError"),
             })
+
+        # Already cropped — the only work left may be the de-text main/tab.
+        if sticker_dir.exists() and any(sticker_dir.iterdir()):
+            if meta.get("portraitTaskId") and not poll_portrait_task(task_dir, meta):
+                return jsonify({"state": "portrait", "progress": 95})
+            return finished()
 
         # Download and crop
         try:
@@ -382,12 +496,13 @@ def status(task_id):
             download_image(image_urls[0], grid_path)
             process_grid_image(grid_path, task_dir, rows=3, cols=4, remove_bg=True)
 
-            sticker_files = sorted(f.name for f in sticker_dir.glob("*.png"))
-            return jsonify({
-                "state": "done",
-                "stickers": sticker_files,
-                "gridImage": "grid_raw.png",
-            })
+            # main/tab currently carry sticker #1's text. Ask the provider to
+            # strip it; the frontend keeps polling until that settles.
+            submit_portrait_task(task_dir, meta)
+            save_meta(task_dir, meta)
+            if meta.get("portraitTaskId"):
+                return jsonify({"state": "portrait", "progress": 95})
+            return finished()
 
         except Exception as e:
             return jsonify({"state": "error", "message": str(e)}), 500

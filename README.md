@@ -45,13 +45,10 @@ python app.py
 # 安裝依賴
 pip install Pillow
 
-# 基本用法（4列 x 3行 = 12張）
+# 基本用法（4列 x 3行 = 12張，預設會去背成透明背景，符合上架規格）
 python crop_stickers.py 你的大圖.png
 
-# 移除灰色背景（上架 LINE Creators Market 需要透明背景）
-python crop_stickers.py 你的大圖.png --remove-bg
-
-# 保留背景（LINE 拍貼自用）
+# 保留背景（LINE 拍貼自用，不去背）
 python crop_stickers.py 你的大圖.png --keep-bg
 
 # 自訂 grid 大小
